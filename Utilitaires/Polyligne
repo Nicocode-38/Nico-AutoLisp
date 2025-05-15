@@ -1,0 +1,11 @@
+;Auteur : Nicolas PISOT;
+;Fonction : Interpoler un sommet de poly3D à chaque intersection projetée de polyligne2D;
+;Status - en cours;
+
+;;--------------------------------------------------------------------------------------------------------------------------------------
+
+
+(defun c:InterPoly2DProjint ()
+  ;Récupérer les vecteurs et les pentes d'une polyligne
+    
+)
