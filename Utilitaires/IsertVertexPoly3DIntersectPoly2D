@@ -1,0 +1,177 @@
+;Auteur : Nicolas PISOT;
+;Fonction : Interpoler un sommet de poly3D à chaque intersection projetée de polyligne2D;
+
+(defun c:POLY3D_INSERTINTERSECTIONS ( / e3d entData3D pts3D s2D s2D_proj segList segStart segEnd p1 p2
+                                       z1 z2 d1 d2 acadApp doc ms lineObj e2dObj i inters
+                                       x y z iPt3D newPts delResp newPoly newPolyEname copy idx)
+
+  (vl-load-com)
+
+  ;; Fonction pour copier une poly 2D en projeté Z=0
+  (defun copy-2d-poly (obj)
+    (setq pts (vlax-get obj 'Coordinates)) ; x1 y1 x2 y2 ...
+    (setq n (/ (length pts) 2))
+    (setq pts2d '())
+    (repeat n
+      (setq x (nth (* 2 (- n 1)) pts))
+      (setq y (nth (+ 1 (* 2 (- n 1))) pts))
+      (setq pts2d (cons x (cons y pts2d)))
+      (setq n (- n 1))
+    )
+    (setq pts2d (reverse pts2d))
+    (setq ms (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))))
+    (setq newPoly (vla-AddLightWeightPolyline ms (vlax-3d-point-list pts2d)))
+    (vla-put-Elevation newPoly 0.0)
+    newPoly
+  )
+
+  ;; --- Sélection polyligne 3D ---
+  (prompt "\nSélectionnez la polyligne 3D : ")
+  (setq e3d (car (entsel)))
+  (if (not e3d) (progn (prompt "\nAucune sélection.") (exit)))
+
+  (setq entData3D (entget e3d))
+  (if (or (/= (cdr (assoc 0 entData3D)) "POLYLINE")
+          (= 0 (logand (cdr (assoc 70 entData3D)) 8))) ; flag 8 = poly3d
+    (progn (prompt "\nCe n'est pas une POLYLINE 3D.") (exit)))
+
+  ;; Récupérer sommets 3D
+  (setq pts3D '())
+  (setq e3dNext (entnext e3d))
+  (while (and e3dNext (/= (cdr (assoc 0 (entget e3dNext))) "SEQEND"))
+    (setq ent (entget e3dNext))
+    (if (= (cdr (assoc 0 ent)) "VERTEX")
+      (setq pts3D (append pts3D (list (cdr (assoc 10 ent)))))
+    )
+    (setq e3dNext (entnext e3dNext))
+  )
+
+  ;; Sélection polylignes 2D
+  (prompt "\nSélectionnez les polylignes 2D (en plan) : ")
+  (setq s2D (ssget '((0 . "LWPOLYLINE,POLYLINE"))))
+  (if (not s2D)
+    (progn (prompt "\nAucune polyligne 2D sélectionnée.") (exit)))
+
+  ;; Création copies projetées 2D
+  (setq s2D_proj '())
+  (setq i 0)
+  (repeat (sslength s2D)
+    (setq e2d (ssname s2D i))
+    (setq i (1+ i))
+    (setq e2dObj (vlax-ename->vla-object e2d))
+    (setq copy (copy-2d-poly e2dObj))
+    (setq s2D_proj (append s2D_proj (list copy)))
+  )
+
+  ;; Construire segments poly3D
+  (setq segList '())
+  (setq tmpPts pts3D)
+  (while (> (length tmpPts) 1)
+    (setq segStart (car tmpPts))
+    (setq segEnd (cadr tmpPts))
+    (setq segList (append segList (list (list segStart segEnd))))
+    (setq tmpPts (cdr tmpPts))
+  )
+
+  ;; Recherche intersections
+  (setq newPts '())
+  (foreach seg segList
+    (setq segStart (car seg))
+    (setq segEnd (cadr seg))
+    (setq z1 (nth 2 segStart))
+    (setq z2 (nth 2 segEnd))
+    (setq p1 (list (car segStart) (cadr segStart)))
+    (setq p2 (list (car segEnd) (cadr segEnd)))
+
+    ;; Ligne temporaire projetée en XY
+    (setq ms (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object))))
+    (setq lineObj (vla-AddLine ms 
+                     (vlax-3d-point (list (car p1) (cadr p1) 0.0))
+                     (vlax-3d-point (list (car p2) (cadr p2) 0.0))))
+
+    ;; Intersection avec chaque poly2D projetée
+    (setq i 0)
+    (while (< i (length s2D_proj))
+      (setq e2dObj (nth i s2D_proj))
+      (setq i (1+ i))
+      (setq inters (vlax-invoke lineObj 'IntersectWith e2dObj acExtendNone))
+      (if inters
+        (progn
+          ;; Plusieurs points possibles (triplets x y z)
+          (while (> (length inters) 2)
+            (setq x (nth 0 inters))
+            (setq y (nth 1 inters))
+            (setq inters (cdddr inters))
+
+            ;; Interpoler Z
+            (setq d1 (distance p1 (list x y)))
+            (setq d2 (distance p1 p2))
+            (setq z (if (/= d2 0) (+ z1 (* (/ d1 d2) (- z2 z1))) z1))
+
+            (setq iPt3D (list x y z))
+
+            (prompt (strcat "\nIntersection à : " (rtos x 2 3) "," (rtos y 2 3) ", Z=" (rtos z 2 3)))
+
+            (setq newPts (append newPts (list iPt3D)))
+          )
+        )
+      )
+    )
+    ;; Ajouter le sommet de départ
+    (setq newPts (append newPts (list segStart)))
+
+    ;; Supprimer ligne temporaire
+    (vla-delete lineObj)
+  )
+  ;; Ajouter dernier sommet
+  (setq newPts (append newPts (list segEnd)))
+
+  ;; Tri des sommets par distance depuis le premier sommet
+  (defun projDist (pt ref) (distance ref pt))
+  (setq refStart (car pts3D))
+  (setq newPts (vl-sort newPts (function (lambda (a b)
+    (< (projDist a refStart) (projDist b refStart))))))
+  
+  ;; Création nouvelle poly3D
+  (setq newPoly
+    (entmakex
+      (list
+        '(0 . "POLYLINE")
+        '(100 . "AcDbEntity")
+        '(100 . "AcDb3dPolyline")
+        (cons 70 8)
+      )
+    )
+  )
+
+  ;; Ajouter sommets
+  (foreach pt newPts
+    (entmakex
+      (list
+        '(0 . "VERTEX")
+        '(100 . "AcDbEntity")
+        '(100 . "AcDbVertex")
+        '(100 . "AcDb3dPolylineVertex")
+        (cons 10 pt)
+        (cons 70 32)
+      )
+    )
+  )
+  ;; Ajouter SEQEND
+  (entmakex '((0 . "SEQEND")))
+
+  ;; Supprimer polyligne d'origine ?
+  (initget "Oui Non")
+  (setq delResp (getkword "\nSupprimer l'ancienne polyligne 3D ? [Oui/Non] <Non> : "))
+  (if (= delResp "Oui")
+    (entdel e3d))
+
+  ;; Nettoyer copies 2D temporaires
+  (foreach copy s2D_proj
+    (vla-delete copy)
+  )
+
+  (prompt "\n? Nouvelle polyligne 3D créée avec sommets aux intersections.")
+  (princ)
+)
+
