@@ -1,0 +1,69 @@
+;Auteur : Nicolas PISOT;
+;Fonction : Interpoler un sommet de poly3D à chaque intersection projetée de polyligne2D;
+(defun c:VecteursPentesPoly3D ( / sel ent entData pts vecteurs pentes p1 p2 dx dy dz dist penteDeg vecteur )
+  (vl-load-com)
+  (prompt "\nSélectionner une polyligne 3D...")
+  (setq sel (entsel))
+  (if sel
+    (progn
+      (setq ent (car sel))
+      (setq entData (entget ent))
+      (if (= (cdr (assoc 0 entData)) "POLYLINE")
+        (progn
+          ;; Vérifie si c'est une POLYLINE 3D via le drapeau 70 (bit 3 = 8)
+          (if (= (logand (cdr (assoc 70 entData)) 8) 8)
+            (progn
+              ;; Collecte des sommets
+              (setq pts '())
+              (setq ent (entnext ent)) ; passer à l'entité suivante (VERTEX)
+              (while ent
+                (setq entData (entget ent))
+                (cond
+                  ((= (cdr (assoc 0 entData)) "VERTEX")
+                   (setq pts (append pts (list (cdr (assoc 10 entData))))) ; point 3D
+                  )
+                  ((= (cdr (assoc 0 entData)) "SEQEND")
+                   (setq ent nil) ; fin de la séquence
+                  )
+                  (t (setq ent (entnext ent))) ; avancer
+                )
+                (if ent (setq ent (entnext ent)))
+              )
+
+              ;; Calculs
+              (setq vecteurs '() pentes '())
+              (repeat (- (length pts) 1)
+                (setq p1 (car pts)
+                      p2 (cadr pts)
+                      pts (cdr pts)
+                      dx (- (nth 0 p2) (nth 0 p1))
+                      dy (- (nth 1 p2) (nth 1 p1))
+                      dz (- (nth 2 p2) (nth 2 p1))
+                      dist (sqrt (+ (* dx dx) (* dy dy)))
+                      penteDeg (if (/= dist 0.0) (atan (/ dz dist)) 0.0)
+                      vecteur (list dx dy dz)
+                )
+                (setq vecteurs (append vecteurs (list vecteur)))
+                (setq pentes (append pentes (list (* 180.0 (/ penteDeg pi)))))
+              )
+
+              ;; Affichage
+              (prompt "\nVecteurs (dx dy dz) :")
+              (foreach v vecteurs
+                (prompt (strcat "\n  " (vl-princ-to-string v)))
+              )
+              (prompt "\nPentes (en degrés) :")
+              (foreach p pentes
+                (prompt (strcat "\n  " (rtos p 2 2)))
+              )
+            )
+            (prompt "\n? L'objet n'est pas une polyligne 3D.")
+          )
+        )
+        (prompt "\n? Ce n'est pas une polyligne.")
+      )
+    )
+    (prompt "\n? Aucune sélection.")
+  )
+  (princ)
+)
